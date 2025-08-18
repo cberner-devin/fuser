@@ -1944,22 +1944,26 @@ fn as_file_kind(mut mode: u32) -> FileKind {
 }
 
 fn get_groups(pid: u32) -> Vec<u32> {
-    if cfg!(not(target_os = "macos")) {
+    #[cfg(target_os = "linux")]
+    {
         let path = format!("/proc/{pid}/task/{pid}/status");
-        let file = File::open(path).unwrap();
-        for line in BufReader::new(file).lines() {
-            let line = line.unwrap();
-            if line.starts_with("Groups:") {
-                return line["Groups: ".len()..]
-                    .split(' ')
-                    .filter(|x| !x.trim().is_empty())
-                    .map(|x| x.parse::<u32>().unwrap())
-                    .collect();
+        if let Ok(file) = File::open(path) {
+            for line in BufReader::new(file).lines().flatten() {
+                if let Some(rest) = line.strip_prefix("Groups:") {
+                    return rest
+                        .trim_start_matches(' ')
+                        .split_whitespace()
+                        .filter_map(|x| x.parse::<u32>().ok())
+                        .collect();
+                }
             }
         }
+        Vec::new()
     }
-
-    vec![]
+    #[cfg(not(target_os = "linux"))]
+    {
+        Vec::new()
+    }
 }
 
 fn fuse_allow_other_enabled() -> io::Result<bool> {

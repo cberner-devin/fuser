@@ -457,14 +457,9 @@ fn fuse_mount_mount_macfuse(
     mountpoint: &OsStr,
     options: &[MountOption],
 ) -> Result<(File, Option<UnixStream>), Error> {
-    let fuse_device = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(find_macos_fuse_device()?)?;
-
     // The macFUSE helper expects a communication file descriptor passed via
     // the _FUSE_COMMFD env var when using the library-driven mount flow.
-    let (child_socket, _receive_socket) = UnixStream::pair()?;
+    let (child_socket, receive_socket) = UnixStream::pair()?;
     unsafe {
         libc::fcntl(child_socket.as_raw_fd(), libc::F_SETFD, 0);
     }
@@ -477,35 +472,30 @@ fn fuse_mount_mount_macfuse(
         builder.arg(options_strs.join(","));
     }
 
-    let fsname = options
-        .iter()
-        .find_map(|opt| match opt {
-            MountOption::FSName(name) => Some(name.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| {
-            Path::new(mountpoint)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(|s| s.to_owned())
-                .unwrap_or_else(|| mountpoint.to_string_lossy().into_owned())
-        });
-
     builder
         .env("_FUSE_CALL_BY_LIB", "1")
         .env("_FUSE_COMMVERS", "2")
         .env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string())
-        .arg(fuse_device.as_raw_fd().to_string())
-        .arg(&fsname)
         .arg(mountpoint);
 
-    let output = builder.output()?;
-    if !output.status.success() {
-        return Err(io::Error::new(
-            ErrorKind::Other,
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
+    let fusermount_child = builder.spawn()?;
+
+    drop(child_socket);
+
+    let fuse_device = match receive_fusermount_message(&receive_socket) {
+        Ok(f) => f,
+        Err(_) => {
+            // Drop receive socket, since mount_macfuse has exited with an error
+            drop(receive_socket);
+            let output = fusermount_child.wait_with_output().unwrap();
+            return Err(io::Error::new(
+                ErrorKind::Other,
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+    };
+
+    let _ = fusermount_child.wait();
 
     unsafe {
         libc::fcntl(fuse_device.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);

@@ -339,7 +339,7 @@ fn fuse_mount_fusermount(
         builder.env("_FUSE_COMMVERS", "2");
     }
 
-    let mut fusermount_child = builder.spawn()?;
+    let fusermount_child = builder.spawn()?;
 
     drop(child_socket); // close socket in parent
 
@@ -457,26 +457,16 @@ fn fuse_mount_mount_macfuse(
     mountpoint: &OsStr,
     options: &[MountOption],
 ) -> Result<(File, Option<UnixStream>), Error> {
-    let fsname = options
-        .iter()
-        .find_map(|opt| match opt {
-            MountOption::FSName(name) => Some(name.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| {
-            Path::new(mountpoint)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(|s| s.to_owned())
-                .unwrap_or_else(|| mountpoint.to_string_lossy().into_owned())
-        });
-
     // The macFUSE helper expects a communication file descriptor passed via
     // the _FUSE_COMMFD env var when using the library-driven mount flow.
     let (child_socket, receive_socket) = UnixStream::pair()?;
     unsafe {
         libc::fcntl(child_socket.as_raw_fd(), libc::F_SETFD, 0);
     }
+
+    let daemon_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_owned()));
 
     let mut builder = Command::new(fusermount_bin);
     builder.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -490,8 +480,11 @@ fn fuse_mount_mount_macfuse(
         .env("_FUSE_CALL_BY_LIB", "1")
         .env("_FUSE_COMMVERS", "2")
         .env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string())
-        .arg(&fsname)
         .arg(mountpoint);
+
+    if let Some(daemon_path) = daemon_path {
+        builder.env("_FUSE_DAEMON_PATH", daemon_path);
+    }
 
     let mut fusermount_child = builder.spawn()?;
 

@@ -289,6 +289,11 @@ fn fuse_mount_fusermount(
         return fuse_mount_mount_fusefs(&fusermount_bin, mountpoint, options);
     }
 
+    #[cfg(target_os = "macos")]
+    if fusermount_bin.ends_with(MOUNT_MACFUSE_BIN) {
+        return fuse_mount_mount_macfuse(&fusermount_bin, mountpoint, options);
+    }
+
     let (child_socket, receive_socket) = UnixStream::pair()?;
 
     unsafe {
@@ -418,6 +423,44 @@ fn fuse_mount_mount_fusefs(
             return Err(io::Error::last_os_error());
         }
     }
+
+    let mut builder = Command::new(fusermount_bin);
+    builder.stdout(Stdio::piped()).stderr(Stdio::piped());
+    if !options.is_empty() {
+        builder.arg("-o");
+        let options_strs: Vec<String> = options.iter().map(option_to_string).collect();
+        builder.arg(options_strs.join(","));
+    }
+
+    builder
+        .arg(fuse_device.as_raw_fd().to_string())
+        .arg(mountpoint);
+
+    let output = builder.output()?;
+    if !output.status.success() {
+        return Err(io::Error::new(
+            ErrorKind::Other,
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    unsafe {
+        libc::fcntl(fuse_device.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+
+    Ok((fuse_device, None))
+}
+
+#[cfg(target_os = "macos")]
+fn fuse_mount_mount_macfuse(
+    fusermount_bin: &str,
+    mountpoint: &OsStr,
+    options: &[MountOption],
+) -> Result<(File, Option<UnixStream>), Error> {
+    let fuse_device = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(find_macos_fuse_device()?)?;
 
     let mut builder = Command::new(fusermount_bin);
     builder.stdout(Stdio::piped()).stderr(Stdio::piped());

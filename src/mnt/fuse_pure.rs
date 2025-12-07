@@ -309,18 +309,19 @@ fn fuse_mount_fusermount(
     let fsname = options
         .iter()
         .find_map(|opt| match opt {
-            MountOption::FSName(name) => Some(name.as_str()),
+            MountOption::FSName(name) => Some(name.clone()),
             _ => None,
         })
         .unwrap_or_else(|| {
             Path::new(mountpoint)
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or_else(|| mountpoint.to_string_lossy().as_ref())
+                .map(|s| s.to_owned())
+                .unwrap_or_else(|| mountpoint.to_string_lossy().into_owned())
         });
 
     if is_macfuse_helper {
-        builder.arg(fsname).arg(mountpoint);
+        builder.arg(&fsname).arg(mountpoint);
     } else {
         builder.arg("--").arg(mountpoint);
     }

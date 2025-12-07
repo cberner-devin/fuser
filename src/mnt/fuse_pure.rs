@@ -462,6 +462,13 @@ fn fuse_mount_mount_macfuse(
         .write(true)
         .open(find_macos_fuse_device()?)?;
 
+    // The macFUSE helper expects a communication file descriptor passed via
+    // the _FUSE_COMMFD env var when using the library-driven mount flow.
+    let (child_socket, _receive_socket) = UnixStream::pair()?;
+    unsafe {
+        libc::fcntl(child_socket.as_raw_fd(), libc::F_SETFD, 0);
+    }
+
     let mut builder = Command::new(fusermount_bin);
     builder.stdout(Stdio::piped()).stderr(Stdio::piped());
     if !options.is_empty() {
@@ -487,6 +494,7 @@ fn fuse_mount_mount_macfuse(
     builder
         .env("_FUSE_CALL_BY_LIB", "1")
         .env("_FUSE_COMMVERS", "2")
+        .env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string())
         .arg(fuse_device.as_raw_fd().to_string())
         .arg(&fsname)
         .arg(mountpoint);

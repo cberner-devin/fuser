@@ -39,6 +39,8 @@ const FUSERMOUNT_COMM_ENV: &str = "_FUSE_COMMFD";
 const MOUNT_FUSEFS_BIN: &str = "mount_fusefs";
 #[cfg(target_os = "macos")]
 const MOUNT_MACFUSE_BIN: &str = "/Library/Filesystems/macfuse.fs/Contents/Resources/mount_macfuse";
+#[cfg(target_os = "macos")]
+const MACFUSE_DEVICE_PREFIXES: [&str; 2] = ["/dev/osxfuse", "/dev/macfuse"];
 
 #[cfg_attr(target_os = "freebsd", allow(dead_code))]
 #[cfg(target_os = "freebsd")]
@@ -321,6 +323,7 @@ fn fuse_mount_fusermount(
         });
 
     if is_macfuse_helper {
+        builder.env("_FUSE_CALL_BY_LIB", "1");
         builder.arg(&fsname).arg(mountpoint);
     } else {
         builder.arg("--").arg(mountpoint);
@@ -446,7 +449,10 @@ fn fuse_mount_mount_fusefs(
 // If returned option is none. Then fusermount binary should be tried
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn fuse_mount_sys(mountpoint: &OsStr, options: &[MountOption]) -> Result<Option<File>, Error> {
-    let fuse_device_name = "/dev/fuse";
+    #[cfg(target_os = "macos")]
+    let fuse_device_name = find_macos_fuse_device()?;
+    #[cfg(not(target_os = "macos"))]
+    let fuse_device_name = "/dev/fuse".to_string();
 
     let mountpoint_mode = File::open(mountpoint)?.metadata()?.permissions().mode();
 
@@ -456,7 +462,7 @@ fn fuse_mount_sys(mountpoint: &OsStr, options: &[MountOption]) -> Result<Option<
     let file = match OpenOptions::new()
         .read(true)
         .write(true)
-        .open(fuse_device_name)
+        .open(&fuse_device_name)
     {
         Ok(file) => file,
         Err(error) => {
@@ -519,7 +525,7 @@ fn fuse_mount_sys(mountpoint: &OsStr, options: &[MountOption]) -> Result<Option<
     }
 
     // Default name is "/dev/fuse", then use the subtype, and lastly prefer the name
-    let mut source = fuse_device_name;
+    let mut source = fuse_device_name.as_str();
     if let Some(MountOption::Subtype(subtype)) = options
         .iter()
         .find(|x| matches!(**x, MountOption::Subtype(_)))
@@ -615,6 +621,23 @@ pub fn option_group(option: &MountOption) -> MountOptionGroup {
         MountOption::AllowRoot => MountOptionGroup::KernelOption,
         MountOption::DefaultPermissions => MountOptionGroup::KernelOption,
     }
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_fuse_device() -> io::Result<String> {
+    for prefix in MACFUSE_DEVICE_PREFIXES {
+        for idx in 0..32 {
+            let path = format!("{prefix}{idx}");
+            if Path::new(&path).exists() {
+                return Ok(path);
+            }
+        }
+    }
+
+    Err(io::Error::new(
+        ErrorKind::NotFound,
+        "No macFUSE device found (looked for /dev/osxfuse* and /dev/macfuse*)",
+    ))
 }
 
 #[cfg(target_os = "linux")]

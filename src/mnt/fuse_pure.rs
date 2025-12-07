@@ -478,7 +478,7 @@ fn fuse_mount_mount_macfuse(
         .env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string())
         .arg(mountpoint);
 
-    let fusermount_child = builder.spawn()?;
+    let mut fusermount_child = builder.spawn()?;
 
     drop(child_socket);
 

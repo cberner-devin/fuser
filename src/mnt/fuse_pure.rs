@@ -457,6 +457,20 @@ fn fuse_mount_mount_macfuse(
     mountpoint: &OsStr,
     options: &[MountOption],
 ) -> Result<(File, Option<UnixStream>), Error> {
+    let fsname = options
+        .iter()
+        .find_map(|opt| match opt {
+            MountOption::FSName(name) => Some(name.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            Path::new(mountpoint)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|s| s.to_owned())
+                .unwrap_or_else(|| mountpoint.to_string_lossy().into_owned())
+        });
+
     // The macFUSE helper expects a communication file descriptor passed via
     // the _FUSE_COMMFD env var when using the library-driven mount flow.
     let (child_socket, receive_socket) = UnixStream::pair()?;
@@ -476,6 +490,7 @@ fn fuse_mount_mount_macfuse(
         .env("_FUSE_CALL_BY_LIB", "1")
         .env("_FUSE_COMMVERS", "2")
         .env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string())
+        .arg(&fsname)
         .arg(mountpoint);
 
     let mut fusermount_child = builder.spawn()?;

@@ -470,8 +470,25 @@ fn fuse_mount_mount_macfuse(
         builder.arg(options_strs.join(","));
     }
 
+    let fsname = options
+        .iter()
+        .find_map(|opt| match opt {
+            MountOption::FSName(name) => Some(name.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            Path::new(mountpoint)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|s| s.to_owned())
+                .unwrap_or_else(|| mountpoint.to_string_lossy().into_owned())
+        });
+
     builder
+        .env("_FUSE_CALL_BY_LIB", "1")
+        .env("_FUSE_COMMVERS", "2")
         .arg(fuse_device.as_raw_fd().to_string())
+        .arg(&fsname)
         .arg(mountpoint);
 
     let output = builder.output()?;

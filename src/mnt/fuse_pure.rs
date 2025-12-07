@@ -300,10 +300,32 @@ fn fuse_mount_fusermount(
         let options_strs: Vec<String> = options.iter().map(option_to_string).collect();
         builder.arg(options_strs.join(","));
     }
-    builder
-        .arg("--")
-        .arg(mountpoint)
-        .env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string());
+
+    #[cfg(target_os = "macos")]
+    let is_macfuse_helper = fusermount_bin.ends_with(MOUNT_MACFUSE_BIN);
+    #[cfg(not(target_os = "macos"))]
+    let is_macfuse_helper = false;
+
+    let fsname = options
+        .iter()
+        .find_map(|opt| match opt {
+            MountOption::FSName(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            Path::new(mountpoint)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_else(|| mountpoint.to_string_lossy().as_ref())
+        });
+
+    if is_macfuse_helper {
+        builder.arg(fsname).arg(mountpoint);
+    } else {
+        builder.arg("--").arg(mountpoint);
+    }
+
+    builder.env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string());
     if needs_comm_version {
         builder.env("_FUSE_COMMVERS", "2");
     }

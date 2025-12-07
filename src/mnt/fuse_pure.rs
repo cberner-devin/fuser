@@ -339,7 +339,7 @@ fn fuse_mount_fusermount(
         builder.env("_FUSE_COMMVERS", "2");
     }
 
-    let fusermount_child = builder.spawn()?;
+    let mut fusermount_child = builder.spawn()?;
 
     drop(child_socket); // close socket in parent
 

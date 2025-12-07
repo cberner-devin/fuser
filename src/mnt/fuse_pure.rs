@@ -143,7 +143,9 @@ fn fuse_unmount_pure(mountpoint: &CStr) {
         }
     }
 
-    let mut builder = Command::new(detect_fusermount_bin());
+    let (fusermount_bin, _) = detect_fusermount_bin();
+
+    let mut builder = Command::new(&fusermount_bin);
     builder.stdout(Stdio::piped()).stderr(Stdio::piped());
     builder
         .arg("-u")

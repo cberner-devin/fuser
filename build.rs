@@ -10,10 +10,13 @@ fn main() {
 
     if matches!(
         target_os.as_str(),
-        "linux" | "freebsd" | "dragonfly" | "openbsd" | "netbsd"
+        "linux" | "freebsd" | "dragonfly" | "openbsd" | "netbsd" | "macos"
     ) && cfg!(not(feature = "libfuse"))
     {
         println!("cargo:rustc-cfg=fuser_mount_impl=\"pure-rust\"");
+        if target_os == "macos" {
+            println!("cargo:rustc-cfg=feature=\"macfuse-4-compat\"");
+        }
     } else if target_os == "macos" {
         pkg_config::Config::new()
             .atleast_version("2.6.0")

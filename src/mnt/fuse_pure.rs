@@ -37,6 +37,10 @@ const FUSERMOUNT_BIN: &str = "fusermount";
 const FUSERMOUNT3_BIN: &str = "fusermount3";
 const FUSERMOUNT_COMM_ENV: &str = "_FUSE_COMMFD";
 const MOUNT_FUSEFS_BIN: &str = "mount_fusefs";
+#[cfg(target_os = "macos")]
+const MOUNT_MACFUSE_BIN: &str = "/Library/Filesystems/macfuse.fs/Contents/Resources/mount_macfuse";
+#[cfg(target_os = "macos")]
+const MACFUSE_DEVICE_PREFIXES: [&str; 2] = ["/dev/osxfuse", "/dev/macfuse"];
 
 #[cfg_attr(target_os = "freebsd", allow(dead_code))]
 #[cfg(target_os = "freebsd")]
@@ -107,9 +111,6 @@ fn fuse_mount_pure(
         return fuse_mount_fusermount(mountpoint, options);
     }
 
-    // The direct mount path is currently implemented only for Linux and macOS.
-    // Other supported Unix targets (such as the BSDs) rely on the setuid
-    // mount helper, which mirrors libfuse's approach.
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         return fuse_mount_fusermount(mountpoint, options);
@@ -117,11 +118,11 @@ fn fuse_mount_pure(
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let res = fuse_mount_sys(mountpoint, options)?;
-        match res {
-            Some(file) => Ok((file, None)),
-            _ => {
-                // Retry
+        match fuse_mount_sys(mountpoint, options) {
+            Ok(Some(file)) => Ok((file, None)),
+            Ok(None) => fuse_mount_fusermount(mountpoint, options),
+            Err(err) => {
+                debug!("Direct mount failed, retrying with helper: {err}");
                 fuse_mount_fusermount(mountpoint, options)
             }
         }
@@ -144,7 +145,9 @@ fn fuse_unmount_pure(mountpoint: &CStr) {
         }
     }
 
-    let mut builder = Command::new(detect_fusermount_bin());
+    let (fusermount_bin, _) = detect_fusermount_bin();
+
+    let mut builder = Command::new(&fusermount_bin);
     builder.stdout(Stdio::piped()).stderr(Stdio::piped());
     builder
         .arg("-u")
@@ -159,25 +162,28 @@ fn fuse_unmount_pure(mountpoint: &CStr) {
     }
 }
 
-fn detect_fusermount_bin() -> String {
-    for name in [
-        FUSERMOUNT3_BIN.to_string(),
-        FUSERMOUNT_BIN.to_string(),
-        MOUNT_FUSEFS_BIN.to_string(),
-        format!("/sbin/{FUSERMOUNT3_BIN}"),
-        format!("/sbin/{FUSERMOUNT_BIN}"),
-        format!("/sbin/{MOUNT_FUSEFS_BIN}"),
-        format!("/bin/{FUSERMOUNT3_BIN}"),
-        format!("/bin/{FUSERMOUNT_BIN}"),
-    ]
-    .iter()
-    {
-        if Command::new(name).arg("-h").output().is_ok() {
-            return name.to_string();
+fn detect_fusermount_bin() -> (String, bool) {
+    #[cfg(target_os = "macos")]
+    let macfuse_paths = [MOUNT_MACFUSE_BIN.to_string()];
+    #[cfg(not(target_os = "macos"))]
+    let macfuse_paths: [String; 0] = [];
+
+    for (name, needs_comm_version) in macfuse_paths.into_iter().map(|p| (p, true)).chain([
+        (FUSERMOUNT3_BIN.to_string(), false),
+        (FUSERMOUNT_BIN.to_string(), false),
+        (MOUNT_FUSEFS_BIN.to_string(), false),
+        (format!("/sbin/{FUSERMOUNT3_BIN}"), false),
+        (format!("/sbin/{FUSERMOUNT_BIN}"), false),
+        (format!("/sbin/{MOUNT_FUSEFS_BIN}"), false),
+        (format!("/bin/{FUSERMOUNT3_BIN}"), false),
+        (format!("/bin/{FUSERMOUNT_BIN}"), false),
+    ]) {
+        if Command::new(&name).arg("-h").output().is_ok() {
+            return (name, needs_comm_version);
         }
     }
     // Default to fusermount3
-    FUSERMOUNT3_BIN.to_string()
+    (FUSERMOUNT3_BIN.to_string(), false)
 }
 
 fn receive_fusermount_message(socket: &UnixStream) -> Result<File, Error> {
@@ -277,10 +283,15 @@ fn fuse_mount_fusermount(
     mountpoint: &OsStr,
     options: &[MountOption],
 ) -> Result<(File, Option<UnixStream>), Error> {
-    let fusermount_bin = detect_fusermount_bin();
+    let (fusermount_bin, needs_comm_version) = detect_fusermount_bin();
 
     if fusermount_bin.ends_with(MOUNT_FUSEFS_BIN) {
         return fuse_mount_mount_fusefs(&fusermount_bin, mountpoint, options);
+    }
+
+    #[cfg(target_os = "macos")]
+    if fusermount_bin.ends_with(MOUNT_MACFUSE_BIN) {
+        return fuse_mount_mount_macfuse(&fusermount_bin, mountpoint, options);
     }
 
     let (child_socket, receive_socket) = UnixStream::pair()?;
@@ -296,10 +307,37 @@ fn fuse_mount_fusermount(
         let options_strs: Vec<String> = options.iter().map(option_to_string).collect();
         builder.arg(options_strs.join(","));
     }
-    builder
-        .arg("--")
-        .arg(mountpoint)
-        .env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string());
+
+    #[cfg(target_os = "macos")]
+    let is_macfuse_helper = fusermount_bin.ends_with(MOUNT_MACFUSE_BIN);
+    #[cfg(not(target_os = "macos"))]
+    let is_macfuse_helper = false;
+
+    let fsname = options
+        .iter()
+        .find_map(|opt| match opt {
+            MountOption::FSName(name) => Some(name.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            Path::new(mountpoint)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|s| s.to_owned())
+                .unwrap_or_else(|| mountpoint.to_string_lossy().into_owned())
+        });
+
+    if is_macfuse_helper {
+        builder.env("_FUSE_CALL_BY_LIB", "1");
+        builder.arg(&fsname).arg(mountpoint);
+    } else {
+        builder.arg("--").arg(mountpoint);
+    }
+
+    builder.env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string());
+    if needs_comm_version {
+        builder.env("_FUSE_COMMVERS", "2");
+    }
 
     let fusermount_child = builder.spawn()?;
 
@@ -414,10 +452,74 @@ fn fuse_mount_mount_fusefs(
     Ok((fuse_device, None))
 }
 
+#[cfg(target_os = "macos")]
+fn fuse_mount_mount_macfuse(
+    fusermount_bin: &str,
+    mountpoint: &OsStr,
+    options: &[MountOption],
+) -> Result<(File, Option<UnixStream>), Error> {
+    // The macFUSE helper expects a communication file descriptor passed via
+    // the _FUSE_COMMFD env var when using the library-driven mount flow.
+    let (child_socket, receive_socket) = UnixStream::pair()?;
+    unsafe {
+        libc::fcntl(child_socket.as_raw_fd(), libc::F_SETFD, 0);
+    }
+
+    let daemon_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_owned()));
+
+    let mut builder = Command::new(fusermount_bin);
+    builder.stdout(Stdio::piped()).stderr(Stdio::piped());
+    if !options.is_empty() {
+        builder.arg("-o");
+        let options_strs: Vec<String> = options.iter().map(option_to_string).collect();
+        builder.arg(options_strs.join(","));
+    }
+
+    builder
+        .env("_FUSE_CALL_BY_LIB", "1")
+        .env("_FUSE_COMMVERS", "2")
+        .env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string())
+        .arg(mountpoint);
+
+    if let Some(daemon_path) = daemon_path {
+        builder.env("_FUSE_DAEMON_PATH", daemon_path);
+    }
+
+    let mut fusermount_child = builder.spawn()?;
+
+    drop(child_socket);
+
+    let fuse_device = match receive_fusermount_message(&receive_socket) {
+        Ok(f) => f,
+        Err(_) => {
+            // Drop receive socket, since mount_macfuse has exited with an error
+            drop(receive_socket);
+            let output = fusermount_child.wait_with_output().unwrap();
+            return Err(io::Error::new(
+                ErrorKind::Other,
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+    };
+
+    let _ = fusermount_child.wait();
+
+    unsafe {
+        libc::fcntl(fuse_device.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+
+    Ok((fuse_device, None))
+}
+
 // If returned option is none. Then fusermount binary should be tried
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn fuse_mount_sys(mountpoint: &OsStr, options: &[MountOption]) -> Result<Option<File>, Error> {
-    let fuse_device_name = "/dev/fuse";
+    #[cfg(target_os = "macos")]
+    let fuse_device_name = find_macos_fuse_device()?;
+    #[cfg(not(target_os = "macos"))]
+    let fuse_device_name = "/dev/fuse".to_string();
 
     let mountpoint_mode = File::open(mountpoint)?.metadata()?.permissions().mode();
 
@@ -427,7 +529,7 @@ fn fuse_mount_sys(mountpoint: &OsStr, options: &[MountOption]) -> Result<Option<
     let file = match OpenOptions::new()
         .read(true)
         .write(true)
-        .open(fuse_device_name)
+        .open(&fuse_device_name)
     {
         Ok(file) => file,
         Err(error) => {
@@ -490,7 +592,7 @@ fn fuse_mount_sys(mountpoint: &OsStr, options: &[MountOption]) -> Result<Option<
     }
 
     // Default name is "/dev/fuse", then use the subtype, and lastly prefer the name
-    let mut source = fuse_device_name;
+    let mut source = fuse_device_name.as_str();
     if let Some(MountOption::Subtype(subtype)) = options
         .iter()
         .find(|x| matches!(**x, MountOption::Subtype(_)))
@@ -586,6 +688,23 @@ pub fn option_group(option: &MountOption) -> MountOptionGroup {
         MountOption::AllowRoot => MountOptionGroup::KernelOption,
         MountOption::DefaultPermissions => MountOptionGroup::KernelOption,
     }
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_fuse_device() -> io::Result<String> {
+    for prefix in MACFUSE_DEVICE_PREFIXES {
+        for idx in 0..32 {
+            let path = format!("{prefix}{idx}");
+            if Path::new(&path).exists() {
+                return Ok(path);
+            }
+        }
+    }
+
+    Err(io::Error::new(
+        ErrorKind::NotFound,
+        "No macFUSE device found (looked for /dev/osxfuse* and /dev/macfuse*)",
+    ))
 }
 
 #[cfg(target_os = "linux")]

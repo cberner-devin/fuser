@@ -477,6 +477,7 @@ fn fuse_mount_mount_macfuse(
     }
 
     builder
+        .env("_FUSE_CALL_BY_LIB", "1")
         .env("_FUSE_COMMVERS", "2")
         .env(FUSERMOUNT_COMM_ENV, child_socket.as_raw_fd().to_string())
         .arg(mountpoint);

@@ -48,6 +48,42 @@ jobs:
       - name: Run cargo doc for all features
         run: cargo doc --all --no-deps --all-features
 
+      - name: Test MacFUSE FSKit backend
+        run: |
+          # Clone MacFUSE demo repository
+          git clone https://github.com/macfuse/demo.git /tmp/macfuse-demo
+          
+          # Build LoopbackFS C example
+          cd /tmp/macfuse-demo/LoopbackFS/LoopbackFS-libfuse2-C
+          clang -o loopbackfs main.c \
+            -I/usr/local/include/fuse \
+            -L/usr/local/lib \
+            -lfuse \
+            -D_FILE_OFFSET_BITS=64 \
+            -DFUSE_USE_VERSION=26
+          
+          # Create mount point and source directory
+          mkdir -p /tmp/loopback_mnt /tmp/loopback_src
+          echo "Hello from FSKit!" > /tmp/loopback_src/test.txt
+          
+          # Run LoopbackFS with FSKit backend
+          echo "Starting LoopbackFS with FSKit backend..."
+          ./loopbackfs -o backend=fskit -f /tmp/loopback_mnt /tmp/loopback_src &
+          FUSE_PID=$!
+          sleep 10
+          
+          # Check if mount worked
+          echo "Directory contents:"
+          ls -la /tmp/loopback_mnt || echo "Failed to list directory"
+          
+          # Try to read the test file
+          echo "Reading test file:"
+          cat /tmp/loopback_mnt/test.txt || echo "Failed to read test file"
+          
+          # Cleanup
+          kill $FUSE_PID 2>/dev/null || true
+          wait $FUSE_PID 2>/dev/null || true
+
       - name: Run mount tests
         run: |
           gtimeout 60 ./osx_mount_tests.sh

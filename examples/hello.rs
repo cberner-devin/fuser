@@ -6,7 +6,6 @@ use clap::Arg;
 use clap::ArgAction;
 use clap::Command;
 use clap::crate_version;
-use log::LevelFilter;
 use fuser::Errno;
 use fuser::FileAttr;
 use fuser::FileHandle;
@@ -156,24 +155,14 @@ fn main() {
                 .help("Allow root user to access filesystem"),
         )
         .get_matches();
-    env_logger::builder()
-        .format_timestamp_nanos()
-        .filter_level(LevelFilter::Debug)
-        .init();
+    env_logger::init();
     let mountpoint = matches.get_one::<String>("MOUNT_POINT").unwrap();
     let mut options = vec![MountOption::RO, MountOption::FSName("hello".to_string())];
-    if cfg!(target_os = "macos") {
-        options.push(MountOption::CUSTOM("backend=fskit".to_string()));
-    }
     if matches.get_flag("auto_unmount") {
         options.push(MountOption::AutoUnmount);
     }
     if matches.get_flag("allow-root") {
         options.push(MountOption::AllowRoot);
     }
-    if let Err(e) = fuser::mount2(HelloFS, mountpoint, &options) {
-        eprintln!("HelloFS mount FAILED: {}", e);
-    } else {
-        println!("HelloFS mounted successfully");
-    }
+    fuser::mount2(HelloFS, mountpoint, &options).unwrap();
 }

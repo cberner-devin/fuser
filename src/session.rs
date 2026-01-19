@@ -110,12 +110,8 @@ impl<FS: Filesystem> Session<FS> {
             modified_options.push(MountOption::AllowOther);
             Mount::new(mountpoint, &modified_options)?
         } else {
-            warn!("ping");
-            let r = Mount::new(mountpoint, options)?;
-            warn!("ping2");
-            r
+            Mount::new(mountpoint, options)?
         };
-        warn!("Mounted successfully?");
 
         let ch = Channel::new(file);
         let allowed = if options.contains(&MountOption::AllowRoot) {

@@ -21,16 +21,15 @@ GREEN="\e[32m"
 RED="\e[31m"
 
 function run_test {
-  DIR=$(sudo mktemp -d -p /Volumes)
-  sudo chown $USER $DIR
-  cargo build --example hello --features=libfuse > /dev/null 2>&1
-  cargo run --example hello --features=libfuse -- $DIR $2 &
+  DIR=$(mktemp -d)
+  cargo build --example hello > /dev/null 2>&1
+  cargo run --example hello -- $DIR $2 &
   FUSE_PID=$!
   sleep 2
 
   echo "mounting at $DIR"
   # Make sure FUSE was successfully mounted
-#  mount | grep hello || exit 1
+  mount | grep hello || exit 1
 
   if [[ $(cat ${DIR}/hello.txt) = "Hello World!" ]]; then
       echo -e "$GREEN OK $1 $2 $NC"

@@ -15,6 +15,7 @@ trap '
 ' INT EXIT
 
 export RUST_BACKTRACE=1
+export RUST_LOG=debug
 
 NC="\e[39m"
 GREEN="\e[32m"
@@ -22,12 +23,20 @@ RED="\e[31m"
 
 function run_test {
   DIR=$(mktemp -d)
+  LOG_FILE=$(mktemp)
   cargo build --example hello > /dev/null 2>&1
-  cargo run --example hello -- $DIR $2 &
+  echo "Starting hello example with mount point: $DIR"
+  cargo run --example hello -- $DIR $2 > "$LOG_FILE" 2>&1 &
   FUSE_PID=$!
-  sleep 5
+  sleep 10
 
   echo "mounting at $DIR"
+  echo "Hello example output:"
+  cat "$LOG_FILE"
+  echo "---"
+  echo "Directory contents:"
+  ls -la "$DIR" || echo "Failed to list directory"
+  echo "---"
 
   if [[ $(cat ${DIR}/hello.txt) = "Hello World!" ]]; then
       echo -e "$GREEN OK $1 $2 $NC"

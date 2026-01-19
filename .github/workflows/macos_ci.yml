@@ -47,3 +47,7 @@ jobs:
 
       - name: Run cargo doc for all features
         run: cargo doc --all --no-deps --all-features
+
+      - name: Run mount tests
+        run: |
+          timeout 60 ./osx_mount_tests.sh

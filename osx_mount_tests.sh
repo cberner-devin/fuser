@@ -15,6 +15,7 @@ trap '
 ' INT EXIT
 
 export RUST_BACKTRACE=1
+export RUST_LOG=debug
 
 NC="\e[39m"
 GREEN="\e[32m"
@@ -32,6 +33,15 @@ function run_test {
   echo "mounting at $DIR"
   echo "Hello example output:"
   cat "$LOG_FILE"
+  echo "---"
+  echo "Checking if process $FUSE_PID is still running:"
+  if ps -p $FUSE_PID > /dev/null 2>&1; then
+    echo "Process $FUSE_PID is still running"
+  else
+    echo "Process $FUSE_PID has exited"
+    wait $FUSE_PID
+    echo "Exit code: $?"
+  fi
   echo "---"
   echo "Mount output:"
   mount

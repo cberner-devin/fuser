@@ -62,23 +62,22 @@ jobs:
             -D_FILE_OFFSET_BITS=64 \
             -DFUSE_USE_VERSION=26
           
-          # Create mount point and source directory
-          mkdir -p /tmp/loopback_mnt /tmp/loopback_src
-          echo "Hello from FSKit!" > /tmp/loopback_src/test.txt
+          # Create mount point
+          mkdir -p /tmp/loopback_mnt
           
-          # Run LoopbackFS with FSKit backend
+          # Run LoopbackFS with FSKit backend (mirrors root filesystem)
           echo "Starting LoopbackFS with FSKit backend..."
-          ./loopbackfs -o backend=fskit -f /tmp/loopback_mnt /tmp/loopback_src &
+          ./loopbackfs -o backend=fskit -f /tmp/loopback_mnt &
           FUSE_PID=$!
           sleep 10
           
-          # Check if mount worked
-          echo "Directory contents:"
-          ls -la /tmp/loopback_mnt || echo "Failed to list directory"
+          # Check if mount worked by reading /etc/hosts through the loopback mount
+          echo "Directory contents of /tmp/loopback_mnt/etc:"
+          ls -la /tmp/loopback_mnt/etc 2>&1 | head -20 || echo "Failed to list directory"
           
-          # Try to read the test file
-          echo "Reading test file:"
-          cat /tmp/loopback_mnt/test.txt || echo "Failed to read test file"
+          # Try to read /etc/hosts through the loopback mount
+          echo "Reading /etc/hosts through loopback mount:"
+          cat /tmp/loopback_mnt/etc/hosts || echo "Failed to read /etc/hosts"
           
           # Cleanup
           kill $FUSE_PID 2>/dev/null || true

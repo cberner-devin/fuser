@@ -25,7 +25,7 @@ jobs:
 
       - name: Install packages
         run: |
-          brew update > /dev/null && brew install autoconf automake
+          brew update > /dev/null && brew install autoconf automake coreutils
           brew install --cask macfuse
 
       - name: Install Rust
@@ -50,4 +50,4 @@ jobs:
 
       - name: Run mount tests
         run: |
-          timeout 60 ./osx_mount_tests.sh
+          gtimeout 60 ./osx_mount_tests.sh

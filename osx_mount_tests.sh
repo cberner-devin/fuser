@@ -22,14 +22,22 @@ RED="\e[31m"
 
 function run_test {
   DIR=$(mktemp -d)
+  LOG_FILE=$(mktemp)
   cargo build --example hello > /dev/null 2>&1
-  cargo run --example hello -- $DIR $2 &
+  echo "Starting hello example with mount point: $DIR"
+  cargo run --example hello -- $DIR $2 > "$LOG_FILE" 2>&1 &
   FUSE_PID=$!
-  sleep 2
+  sleep 5
 
   echo "mounting at $DIR"
+  echo "Hello example output:"
+  cat "$LOG_FILE"
+  echo "---"
+  echo "Mount output:"
+  mount
+  echo "---"
   # Make sure FUSE was successfully mounted
-  mount | grep hello || exit 1
+  mount | grep hello || mount | grep "$DIR" || exit 1
 
   if [[ $(cat ${DIR}/hello.txt) = "Hello World!" ]]; then
       echo -e "$GREEN OK $1 $2 $NC"

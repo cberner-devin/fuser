@@ -20,7 +20,7 @@ pub(crate) struct MountEntry {
 impl MountEntry {
     /// Returns true if this is a FUSE mount with the specified device name.
     pub(crate) fn is_fuse_mount_on_dev(&self, device: &str) -> bool {
-        self.fstype == "fuse" && self.device == device
+        self.device == device && self.fstype.starts_with("fuse")
     }
 }
 
@@ -39,11 +39,15 @@ impl fmt::Display for MountEntry {
 pub(crate) async fn read_mounts() -> anyhow::Result<Vec<MountEntry>> {
     let content = command_output(["mount"]).await?;
 
-    if !cfg!(target_os = "linux") {
-        bail!("mount parsing is only implemented on Linux")
+    if cfg!(target_os = "linux") {
+        return parse_mount_output_on_linux(&content);
     }
 
-    parse_mount_output_on_linux(&content)
+    if cfg!(target_os = "macos") {
+        return parse_mount_output_on_macos(&content);
+    }
+
+    bail!("mount parsing is only implemented on Linux and macOS")
 }
 
 /// Waits for a FUSE mount with the specified device to appear in mount output.
@@ -124,12 +128,39 @@ fn parse_mount_output_on_linux(content: &str) -> anyhow::Result<Vec<MountEntry>>
     Ok(entries)
 }
 
+/// Parses the output of the `mount` command on macOS.
+fn parse_mount_output_on_macos(content: &str) -> anyhow::Result<Vec<MountEntry>> {
+    let mut entries = Vec::new();
+    for line in content.lines() {
+        // Format: device on mountpoint (fstype, options)
+        let Some((device, rest)) = line.split_once(" on ") else {
+            bail!("Failed to parse mount line: missing ' on ': {}", line);
+        };
+        let Some((mountpoint, rest)) = rest.split_once(" (") else {
+            bail!("Failed to parse mount line: missing ' (': {}", line);
+        };
+        let rest = rest.trim_end_matches(')');
+        let fstype = rest
+            .split_once(',')
+            .map(|(fs, _)| fs)
+            .unwrap_or(rest)
+            .trim();
+        entries.push(MountEntry {
+            device: device.to_owned(),
+            mountpoint: PathBuf::from(mountpoint),
+            fstype: fstype.to_owned(),
+        });
+    }
+    Ok(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use crate::mount_util::MountEntry;
     use crate::mount_util::parse_mount_output_on_linux;
+    use crate::mount_util::parse_mount_output_on_macos;
 
     #[test]
     fn test_parse_mount_output_on_linux() {
@@ -161,6 +192,35 @@ sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)
                     device: "sysfs".to_owned(),
                     mountpoint: PathBuf::from("/sys"),
                     fstype: "sysfs".to_owned()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_mount_output_on_macos() {
+        let content = r#"devfs on /dev (devfs, local, nobrowse)
+map -hosts on /net (autofs, nosuid, automounted, nobrowse)
+hello on /Volumes/hello (fusefs, local, synchronous)
+"#;
+        let entries = parse_mount_output_on_macos(content).unwrap();
+        assert_eq!(
+            entries,
+            vec![
+                MountEntry {
+                    device: "devfs".to_owned(),
+                    mountpoint: PathBuf::from("/dev"),
+                    fstype: "devfs".to_owned()
+                },
+                MountEntry {
+                    device: "map -hosts".to_owned(),
+                    mountpoint: PathBuf::from("/net"),
+                    fstype: "autofs".to_owned()
+                },
+                MountEntry {
+                    device: "hello".to_owned(),
+                    mountpoint: PathBuf::from("/Volumes/hello"),
+                    fstype: "fusefs".to_owned()
                 },
             ]
         );

@@ -2,13 +2,24 @@
 
 ## 0.17 - Unreleased
 
-* Change integers to newtypes in various public APIs
+* Change many integer-based public API parameters to strongly-typed newtypes and bitflags
+* Change `Filesystem` trait methods to use `&self`, and require mounted filesystems to be `Send + Sync + 'static`
+* Change `Filesystem::init` to return `io::Result<()>` and improve typed error handling across request/reply APIs
+* Add support for multiple event loops per session, and add configurable worker thread counts to examples
+* Replace `Vec<MountOption>` mount APIs with a structured `Config` API, including ACL option handling
+* Rename `BackgroundSession::join` to `umount_and_join`, returning `io::Result<()>` instead of panicking
+* Rework session lifecycle internals (handshake/session startup, destroy ordering, and unmount error propagation)
+* Add `FUSE_DEV_IOC_CLONE` support and improve passthrough descriptor handling (`ReplyCreate`, `ReplyOpen`, `BackingId`)
 * Add `FileType` conversion from std `FileType`
-* Rename `BackgroundSession::join` to `umount_and_join`
-  and change it to return `io::Result<()>` instead of panicking
+* Add option to explicitly choose `libfuse2` or `libfuse3`, prefer `libfuse3` by default, and improve no-libfuse builds on BSD/macOS
+* Remove remaining `osxfuse` support and improve `macfuse` compatibility
 * The path to the `fusermount` binary can be specified with the `FUSERMOUNT_PATH` environment variable
 * `allow_root` or `allow_other` must be specified when using `auto_unmount`
-* feature flags `abi-7-xx` are ignored and will be removed in 0.18.
+* Feature flags `abi-7-xx` are now ignored and will be removed in 0.18, with compatibility checks moved to runtime behavior
+* Remove the old ABI-specific feature-flag surface (`abi-7-9` through `abi-7-19`, plus tooling/docs/examples references)
+* Improve Linux/BSD/macOS test coverage by migrating mount tests to `fuser-tests` and expanding CI
+* Performance optimizations in hot paths (buffer reuse, ioctl handling, mount/unmount internals, and locking)
+* Update and expand documentation
 
 ## 0.16.0 - 2025-09-12
 * Add support for passthrough file descriptors
